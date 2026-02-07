@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -106,6 +107,43 @@ class AuditEventItem(BaseModel):
 class AuditResponse(BaseModel):
     events: list[AuditEventItem]
     count: int
+
+
+class RecallRequest(BaseModel):
+    """Request to recall relevant memories for a given context."""
+    query: str
+    top_k: int = 10
+    session_filter: str | None = None
+
+
+class RecallItem(BaseModel):
+    content: str
+    role: str
+    session_id: str
+    score: float
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RecallResponse(BaseModel):
+    memories: list[RecallItem]
+    count: int
+    query: str
+
+
+class SessionIngestRequest(BaseModel):
+    path: str
+
+
+class SessionIngestResponse(BaseModel):
+    session_id: str
+    chunks_ingested: int
+    roles: dict[str, int]
+
+
+class SessionListItem(BaseModel):
+    session_id: str
+    source: str
+    chunks: int
 
 
 class ReasonRequest(BaseModel):
@@ -264,5 +302,90 @@ def create_app(data_dir: str | None = None) -> FastAPI:
             ],
             count=len(events),
         )
+
+    # --- Memory Recall (the key integration point for agents) ---
+
+    @app.post("/api/v1/memory/recall", response_model=RecallResponse)
+    async def memory_recall(req: RecallRequest, spine: MemorySpine = Depends(get_spine)):
+        """Search memory for content relevant to the given query.
+
+        This is the primary endpoint for agents to recall past sessions,
+        conversations, and knowledge. Uses FTS5 keyword search for
+        fast, embedding-free retrieval.
+        """
+        results = spine.search_keyword(req.query, top_k=req.top_k)
+
+        memories = []
+        for r in results:
+            meta = r.metadata or {}
+            role = meta.get("role", "unknown")
+            session_id = meta.get("session_id", "")
+
+            # Filter by session if requested
+            if req.session_filter and session_id and req.session_filter not in session_id:
+                continue
+
+            memories.append(RecallItem(
+                content=r.content,
+                role=role,
+                session_id=session_id,
+                score=r.score,
+                metadata=meta,
+            ))
+
+        return RecallResponse(
+            memories=memories[:req.top_k],
+            count=len(memories),
+            query=req.query,
+        )
+
+    # --- Session Ingestion ---
+
+    @app.post("/api/v1/sessions/ingest", response_model=SessionIngestResponse)
+    async def session_ingest(req: SessionIngestRequest,
+                             spine: MemorySpine = Depends(get_spine)):
+        """Ingest a session file into searchable memory."""
+        from pathlib import Path
+        path = Path(req.path)
+        if not path.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {req.path}")
+        result = spine.ingest_session(path)
+        return SessionIngestResponse(**result)
+
+    @app.get("/api/v1/sessions/list")
+    async def session_list(limit: int = 50, spine: MemorySpine = Depends(get_spine)):
+        """List all ingested sessions with chunk counts."""
+        rows = spine.sqlite._conn.execute(
+            """SELECT json_extract(metadata, '$.session_id') as session_id,
+                      json_extract(metadata, '$.source_file') as source_file,
+                      COUNT(*) as chunk_count
+               FROM chunks
+               WHERE source_id LIKE 'session:%'
+               GROUP BY json_extract(metadata, '$.session_id')
+               ORDER BY chunk_count DESC
+               LIMIT ?""",
+            (limit,)
+        ).fetchall()
+
+        sessions = []
+        for row in rows:
+            sid = row["session_id"]
+            if sid:
+                sessions.append({
+                    "session_id": sid,
+                    "source": row["source_file"] or "",
+                    "chunks": row["chunk_count"],
+                })
+
+        return {"sessions": sessions, "count": len(sessions)}
+
+    # --- Extended Status ---
+
+    @app.get("/api/v1/status/full")
+    async def full_status(spine: MemorySpine = Depends(get_spine)):
+        """Full system status including all cogdedup modules."""
+        status = spine.status()
+        status["service"] = "nova-memory"
+        return status
 
     return app

@@ -94,6 +94,67 @@ class MemorySpine:
         self.audit.log_write("chunks", source_id or "inline", f"ingested {len(chunk_ids)} chunks")
         return chunk_ids
 
+    def ingest_text_sync(self, text: str, source_id: str = "",
+                         metadata: dict[str, Any] | None = None) -> list[str]:
+        """Chunk text and index for FTS5 keyword search (no embeddings needed).
+
+        This is the synchronous counterpart to ingest_text — it stores chunks
+        in SQLite with full-text search but skips FAISS vector indexing.
+        Use this for bulk ingestion where embedding API calls aren't practical.
+        """
+        chunks_text = chunk_text(text)
+        chunk_ids = []
+        for ct in chunks_text:
+            chunk = Chunk(content=ct, source_id=source_id, metadata=metadata or {})
+            self.sqlite.insert_chunk(chunk)
+            chunk_ids.append(chunk.id)
+        self.audit.log_write("chunks", source_id or "inline", f"ingested {len(chunk_ids)} chunks (sync)")
+        return chunk_ids
+
+    def ingest_session(self, session_path: Path) -> dict:
+        """Parse and ingest an agent session file into searchable memory.
+
+        Parses both Claude Code and OpenClaw JSONL formats, extracts
+        meaningful content (messages, tool calls), chunks it, and stores
+        in SQLite with FTS5 for keyword search.
+
+        Returns dict with session_id, chunks_ingested, roles breakdown.
+        """
+        from c3ae.ingestion.session_parser import SessionParser
+
+        parser = SessionParser()
+        session_chunks = parser.parse_file(session_path)
+
+        if not session_chunks:
+            return {"session_id": session_path.stem, "chunks_ingested": 0, "roles": {}}
+
+        session_id = session_chunks[0].session_id
+        roles: dict[str, int] = {}
+        total_ingested = 0
+
+        for sc in session_chunks:
+            meta = {"role": sc.role, "session_id": sc.session_id,
+                    "source_file": sc.source_file, "index": sc.index}
+            meta.update(sc.metadata)
+
+            chunk = Chunk(
+                content=sc.content,
+                source_id=f"session:{sc.session_id}",
+                metadata=meta,
+            )
+            self.sqlite.insert_chunk(chunk)
+            total_ingested += 1
+            roles[sc.role] = roles.get(sc.role, 0) + 1
+
+        self.audit.log_write("session_ingest", session_id,
+                             f"ingested {total_ingested} chunks from {session_path.name}")
+
+        return {
+            "session_id": session_id,
+            "chunks_ingested": total_ingested,
+            "roles": roles,
+        }
+
     async def ingest_file(self, file_path: Path, metadata: dict[str, Any] | None = None) -> list[str]:
         """Ingest a file from disk."""
         data = file_path.read_bytes()

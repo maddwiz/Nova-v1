@@ -32,8 +32,9 @@ WATCH_DIRS = [
 # Where to store compressed blobs
 OUTPUT_DIR = Path.home() / "Nova-v1" / "data" / "compressed"
 
-# State file to track what's been compressed
+# State files to track what's been compressed/ingested
 STATE_FILE = Path.home() / "Nova-v1" / "data" / "compress-state.json"
+INGEST_STATE_FILE = Path.home() / "Nova-v1" / "data" / "ingest-state.json"
 
 # Minimum file size to bother compressing
 MIN_SIZE = 2000
@@ -70,6 +71,17 @@ def find_sessions() -> list[Path]:
     return sessions
 
 
+def load_ingest_state() -> dict:
+    if INGEST_STATE_FILE.exists():
+        return json.loads(INGEST_STATE_FILE.read_text())
+    return {}
+
+
+def save_ingest_state(state: dict) -> None:
+    INGEST_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    INGEST_STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
 def compress_session(spine: MemorySpine, session_file: Path) -> dict | None:
     """Compress a single session file. Returns result dict or None on error."""
     try:
@@ -95,32 +107,57 @@ def compress_session(spine: MemorySpine, session_file: Path) -> dict | None:
         return None
 
 
-def run_once(spine: MemorySpine) -> int:
-    """Scan for new/changed sessions and compress them. Returns count compressed."""
-    state = load_state()
+def ingest_session(spine: MemorySpine, session_file: Path) -> dict | None:
+    """Ingest a session into searchable memory. Returns result or None on error."""
+    try:
+        result = spine.ingest_session(session_file)
+        return result
+    except Exception as e:
+        print(f"  ERROR ingesting {session_file.name}: {e}", file=sys.stderr)
+        return None
+
+
+def run_once(spine: MemorySpine) -> tuple[int, int]:
+    """Scan for new/changed sessions, compress and ingest them.
+
+    Returns (count_compressed, count_ingested).
+    """
+    compress_state = load_state()
+    ingest_state = load_ingest_state()
     sessions = find_sessions()
     compressed = 0
+    ingested = 0
 
     for session_file in sessions:
         fpath = str(session_file)
         fhash = file_hash(session_file)
 
-        # Skip if already compressed with same hash
-        if fpath in state and state[fpath] == fhash:
-            continue
+        # Compress if needed
+        if fpath not in compress_state or compress_state[fpath] != fhash:
+            result = compress_session(spine, session_file)
+            if result:
+                compress_state[fpath] = fhash
+                compressed += 1
+                print(f"  Compressed {session_file.name}: "
+                      f"{result['original_size']:,} -> {result['compressed_size']:,} "
+                      f"({result['ratio']}x)")
 
-        result = compress_session(spine, session_file)
-        if result:
-            state[fpath] = fhash
-            compressed += 1
-            print(f"  Compressed {session_file.name}: "
-                  f"{result['original_size']:,} -> {result['compressed_size']:,} "
-                  f"({result['ratio']}x)")
+        # Ingest into searchable memory if needed
+        if fpath not in ingest_state or ingest_state[fpath] != fhash:
+            result = ingest_session(spine, session_file)
+            if result and result["chunks_ingested"] > 0:
+                ingest_state[fpath] = fhash
+                ingested += 1
+                print(f"  Ingested {session_file.name}: "
+                      f"{result['chunks_ingested']} chunks "
+                      f"({result['roles']})")
 
     if compressed:
-        save_state(state)
+        save_state(compress_state)
+    if ingested:
+        save_ingest_state(ingest_state)
 
-    return compressed
+    return compressed, ingested
 
 
 def main():
@@ -141,19 +178,24 @@ def main():
     if daemon:
         while True:
             try:
-                count = run_once(spine)
-                if count:
+                n_compressed, n_ingested = run_once(spine)
+                if n_compressed or n_ingested:
                     cs = spine.cogstore.stats()
-                    print(f"  [{time.strftime('%H:%M')}] Compressed {count} sessions, "
-                          f"cogstore: {cs.get('unique_chunks', 0)} chunks")
+                    chunks_in_db = spine.sqlite.count_chunks()
+                    print(f"  [{time.strftime('%H:%M')}] "
+                          f"Compressed {n_compressed}, ingested {n_ingested}, "
+                          f"cogstore: {cs.get('unique_chunks', 0)}, "
+                          f"searchable: {chunks_in_db} chunks")
             except Exception as e:
                 print(f"  Error in scan: {e}", file=sys.stderr)
             time.sleep(SCAN_INTERVAL)
     else:
-        count = run_once(spine)
+        n_compressed, n_ingested = run_once(spine)
         cs = spine.cogstore.stats()
-        print(f"\nDone: {count} sessions compressed, "
-              f"cogstore: {cs.get('unique_chunks', 0)} chunks")
+        chunks_in_db = spine.sqlite.count_chunks()
+        print(f"\nDone: {n_compressed} compressed, {n_ingested} ingested, "
+              f"cogstore: {cs.get('unique_chunks', 0)}, "
+              f"searchable: {chunks_in_db} chunks")
 
     spine.sqlite.close()
 
