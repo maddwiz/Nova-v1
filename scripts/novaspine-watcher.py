@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Nova Session Compression Watcher — watches for new sessions and compresses them.
+"""NovaSpine Session Watcher — watches for new sessions and ingests them.
 
-Monitors the OpenClaw and Claude Code session directories for new/modified .jsonl files
-and compresses them through the cognitive dedup pipeline.
-
-Also ingests sessions into searchable memory (FTS5 + FAISS vectors).
+Monitors session directories for new/modified .jsonl files and ingests them
+into searchable memory (FTS5 + FAISS vectors) with optional compression.
 
 Runs as a systemd user service for persistent operation.
 """

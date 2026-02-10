@@ -570,7 +570,7 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     async def full_status(spine: MemorySpine = Depends(get_spine)):
         """Full system status including all cogdedup modules."""
         status = spine.status()
-        status["service"] = "nova-memory"
+        status["service"] = "novaspine"
         return status
 
     # --- Context Compaction (LLM Prompt Compression) ---

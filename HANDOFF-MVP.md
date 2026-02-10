@@ -1,7 +1,7 @@
-# C3/Ae Memory System — MVP Handoff Document
+# NovaSpine Memory System — MVP Handoff Document
 
 ## For: Codex or any AI coding agent
-## Repo: https://github.com/maddwiz/Nova-v1
+## Repo: https://github.com/maddwiz/NovaSpine
 ## Date: 2026-02-10
 ## Author: Claude Opus 4.6 (on behalf of Desmond)
 
@@ -146,9 +146,9 @@ C3/Ae is a **long-term memory system for LLM agents**. It gives any AI agent the
 
 | File | Purpose | Action |
 |------|---------|--------|
-| `scripts/nova-memory-server.py` | Launches FastAPI server | Rename to `c3ae-server.py` |
-| `scripts/nova-compress-watcher.py` | Background ingestion daemon | Rename to `c3ae-watcher.py` |
-| `scripts/openclaw_session_hook.py` | OpenClaw integration hook | Move to examples/ |
+| `scripts/novaspine-server.py` | Launches FastAPI server | Done |
+| `scripts/novaspine-watcher.py` | Background ingestion daemon | Done |
+| `examples/openclaw_session_hook.py` | OpenClaw integration hook | Moved to examples/ |
 
 ---
 

@@ -3,9 +3,9 @@ requires = ["setuptools>=75.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nova-v1"
-version = "1.0.0"
-description = "Nova Memory System — cognitive compression + persistent memory for AI agents"
+name = "novaspine"
+version = "0.1.0"
+description = "NovaSpine — long-term memory for LLM agents with hybrid vector + keyword search"
 requires-python = ">=3.12"
 license = {text = "MIT"}
 dependencies = [
@@ -35,7 +35,7 @@ semantic = ["scikit-learn>=1.3"]
 crypto = ["cryptography>=41"]
 
 [project.scripts]
-nova = "c3ae.cli:main"
+novaspine = "c3ae.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
