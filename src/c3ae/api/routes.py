@@ -130,6 +130,20 @@ class RecallResponse(BaseModel):
     query: str
 
 
+class AugmentRequest(BaseModel):
+    """Request pre-formatted memory context for LLM injection."""
+    query: str
+    top_k: int = 5
+    min_score: float = 0.005
+    format: str = "xml"  # "xml" or "plain"
+
+
+class AugmentResponse(BaseModel):
+    context: str
+    count: int
+    memories: list[RecallItem]
+
+
 class SessionIngestRequest(BaseModel):
     path: str
 
@@ -431,6 +445,53 @@ def create_app(data_dir: str | None = None) -> FastAPI:
             count=len(memories),
             query=req.query,
         )
+
+    # --- Memory Augment (pre-formatted context for LLM injection) ---
+
+    @app.post("/api/v1/memory/augment", response_model=AugmentResponse)
+    async def memory_augment(req: AugmentRequest, spine: MemorySpine = Depends(get_spine)):
+        """Return pre-formatted memory context ready for LLM injection.
+
+        This is the product API for automatic context augmentation.
+        Any integration (OpenClaw, LangChain, custom agents) can call this
+        to get relevant memories formatted for injection into LLM prompts.
+        """
+        try:
+            results = await spine.search(req.query, top_k=req.top_k * 3)
+        except Exception:
+            results = spine.search_keyword(req.query, top_k=req.top_k)
+
+        memories = []
+        for r in results:
+            meta = r.metadata or {}
+            role = meta.get("role", "unknown")
+            session_id = meta.get("session_id", "")
+            if r.score < req.min_score:
+                continue
+            memories.append(RecallItem(
+                content=r.content,
+                role=role,
+                session_id=session_id,
+                score=r.score,
+                metadata=meta,
+            ))
+
+        memories = memories[:req.top_k]
+
+        if not memories:
+            return AugmentResponse(context="", count=0, memories=[])
+
+        if req.format == "xml":
+            lines = []
+            for m in memories:
+                tag = m.role if m.role != "unknown" else "memory"
+                lines.append(f"  <{tag}>{m.content}</{tag}>")
+            context = "<relevant-memories>\n" + "\n".join(lines) + "\n</relevant-memories>"
+        else:
+            lines = [f"- [{m.role}] {m.content}" for m in memories]
+            context = "Relevant memories:\n" + "\n".join(lines)
+
+        return AugmentResponse(context=context, count=len(memories), memories=memories)
 
     # --- Session Ingestion ---
 
