@@ -128,11 +128,20 @@ class MemorySpine:
         if not session_chunks:
             return {"session_id": session_path.stem, "chunks_ingested": 0, "roles": {}}
 
+        # Only ingest roles that contain meaningful conversational content.
+        # tool_call, tool_result, system, and unknown are noise that pollutes search.
+        _INGEST_ROLES = {"user", "assistant"}
+
         session_id = session_chunks[0].session_id
         roles: dict[str, int] = {}
+        skipped: dict[str, int] = {}
         total_ingested = 0
 
         for sc in session_chunks:
+            if sc.role not in _INGEST_ROLES:
+                skipped[sc.role] = skipped.get(sc.role, 0) + 1
+                continue
+
             meta = {"role": sc.role, "session_id": sc.session_id,
                     "source_file": sc.source_file, "index": sc.index}
             meta.update(sc.metadata)
@@ -147,12 +156,14 @@ class MemorySpine:
             roles[sc.role] = roles.get(sc.role, 0) + 1
 
         self.audit.log_write("session_ingest", session_id,
-                             f"ingested {total_ingested} chunks from {session_path.name}")
+                             f"ingested {total_ingested} chunks from {session_path.name}"
+                             f" (skipped {sum(skipped.values())})")
 
         return {
             "session_id": session_id,
             "chunks_ingested": total_ingested,
             "roles": roles,
+            "skipped": skipped,
         }
 
     async def ingest_file(self, file_path: Path, metadata: dict[str, Any] | None = None) -> list[str]:
