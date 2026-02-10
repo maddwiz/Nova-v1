@@ -21,7 +21,10 @@ class AuditLog:
             detail=detail,
             outcome=outcome,
         )
-        self.store.insert_audit_event(event)
+        try:
+            self.store.insert_audit_event(event)
+        except Exception:
+            pass  # Audit is best-effort — never crash a request
         return event
 
     def log_write(self, target_type: str, target_id: str, detail: str = "") -> AuditEvent:

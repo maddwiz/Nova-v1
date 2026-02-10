@@ -208,6 +208,19 @@ class SQLiteStore:
         self._conn.execute("PRAGMA busy_timeout=30000")
         self._init_schema()
 
+    def _commit(self, retries: int = 3) -> None:
+        """Commit with retry on database-locked errors."""
+        import time as _time
+        for attempt in range(retries):
+            try:
+                self._conn.commit()
+                return
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and attempt < retries - 1:
+                    _time.sleep(1.0 * (attempt + 1))
+                    continue
+                raise
+
     def _init_schema(self) -> None:
         import time as _time
         for attempt in range(5):
@@ -237,7 +250,7 @@ class SQLiteStore:
             "INSERT INTO sessions(id, started_at, metadata) VALUES (?, ?, ?)",
             (session_id, iso_str(utcnow()), json_dumps(metadata or {})),
         )
-        self._conn.commit()
+        self._commit()
         return session_id
 
     def end_session(self, session_id: str) -> None:
@@ -245,7 +258,7 @@ class SQLiteStore:
             "UPDATE sessions SET ended_at=? WHERE id=?",
             (iso_str(utcnow()), session_id),
         )
-        self._conn.commit()
+        self._commit()
 
     # --- Chunks ---
 
@@ -254,7 +267,7 @@ class SQLiteStore:
             "INSERT INTO chunks(id, source_id, content, metadata, created_at) VALUES (?, ?, ?, ?, ?)",
             (chunk.id, chunk.source_id, chunk.content, json_dumps(chunk.metadata), iso_str(chunk.created_at)),
         )
-        self._conn.commit()
+        self._commit()
         return chunk.id
 
     def get_chunk(self, chunk_id: str) -> Chunk | None:
@@ -273,7 +286,7 @@ class SQLiteStore:
 
     def delete_chunk(self, chunk_id: str) -> bool:
         cur = self._conn.execute("DELETE FROM chunks WHERE id=?", (chunk_id,))
-        self._conn.commit()
+        self._commit()
         return cur.rowcount > 0
 
     def search_chunks_fts(self, query: str, limit: int = 20) -> list[SearchResult]:
@@ -317,7 +330,7 @@ class SQLiteStore:
                 json_dumps(entry.metadata), iso_str(entry.created_at),
             ),
         )
-        self._conn.commit()
+        self._commit()
         return entry.id
 
     def get_reasoning_entry(self, entry_id: str) -> ReasoningEntry | None:
@@ -376,7 +389,7 @@ class SQLiteStore:
                 json_dumps(pack.metadata), iso_str(pack.created_at),
             ),
         )
-        self._conn.commit()
+        self._commit()
         return pack.id
 
     def get_evidence_pack(self, pack_id: str) -> EvidencePack | None:
@@ -405,7 +418,7 @@ class SQLiteStore:
                 json_dumps(cos.metadata), iso_str(cos.created_at),
             ),
         )
-        self._conn.commit()
+        self._commit()
         return cos.id
 
     def get_latest_cos(self, session_id: str) -> CarryOverSummary | None:
@@ -436,7 +449,7 @@ class SQLiteStore:
                 json_dumps(capsule.metadata), iso_str(capsule.created_at),
             ),
         )
-        self._conn.commit()
+        self._commit()
         return capsule.id
 
     def get_skill_capsule(self, capsule_id: str) -> SkillCapsule | None:
@@ -485,7 +498,7 @@ class SQLiteStore:
                 event.detail, event.outcome, iso_str(event.created_at),
             ),
         )
-        self._conn.commit()
+        self._commit()
         return event.id
 
     def list_audit_events(self, limit: int = 100, target_type: str | None = None) -> list[AuditEvent]:
@@ -520,7 +533,7 @@ class SQLiteStore:
             "INSERT OR REPLACE INTO embedding_cache(text_hash, embedding, model, created_at) VALUES (?, ?, ?, ?)",
             (text_hash, embedding, model, iso_str(utcnow())),
         )
-        self._conn.commit()
+        self._commit()
 
     # --- Files ---
 
@@ -532,7 +545,7 @@ class SQLiteStore:
             (file_id, path, content_hash, size_bytes, mime_type,
              json_dumps(metadata or {}), iso_str(utcnow())),
         )
-        self._conn.commit()
+        self._commit()
         return file_id
 
     def get_file_by_path(self, path: str) -> dict[str, Any] | None:
